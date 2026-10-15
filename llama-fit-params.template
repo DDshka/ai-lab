@@ -1,0 +1,1 @@
+docker compose exec llama-cpp ./llama-fit-params --model /app/models/Qwen3.8-27B-UD-IQ1_S.gguf --fit-target 512 --fit-ctx 16000

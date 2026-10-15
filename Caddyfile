@@ -1,0 +1,7 @@
+http://localhost:{$OPEN_WEBUI_EXTERNAL_PORT} {
+	reverse_proxy open-webui:{$OPEN_WEBUI_INTERNAL_PORT}
+}
+
+http://localhost:{$GRAFANA_EXTERNAL_PORT} {
+    reverse_proxy grafana:{$GRAFANA_INTERNAL_PORT}
+}

@@ -1,0 +1,111 @@
+services:
+  llama-cpp:
+    # https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md
+
+    # windows/wsl with NVIDIA RTX 40XX series
+    # image: ghcr.io/ggml-org/llama.cpp:full-cuda13
+
+    # apple silicon with colima vm-kit
+    # Well, it won't work that way with colima :(
+    # It's recommended to run llama.cpp on bare metal directly in MacOS
+    # image: ghcr.io/ggml-org/llama.cpp:full-vulkan
+
+    image: ghcr.io/ggml-org/llama.cpp:full
+
+    container_name: llama-cpp
+    environment:
+      - LLAMA_ARG_API_KEY_FILE=/run/secrets/llama-cpp-api-key
+    secrets: [ llama-cpp-api-key ]
+    entrypoint: "/app/llama-server --models-preset /app/preset.ini --host 0.0.0.0 --port ${LLAMA_CPP_INTERNAL_PORT}"
+    volumes:
+      - ./models/LLM:/app/models:ro
+      - ./llama-cpp-preset.ini:/app/preset.ini:ro
+    networks: [backend]
+    gpus: all # Windows/WSL (Docker Desktop engine)
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./user-space/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    secrets: [llama-cpp-api-key]
+    networks: [backend]
+    depends_on:
+      - llama-cpp
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_SECURITY_ADMIN_PASSWORD}
+    volumes:
+      - ./user-space/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./user-space/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [backend]
+    depends_on:
+      - prometheus
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    depends_on: [llama-cpp]
+    entrypoint: "bash start.sh --host 0.0.0.0 --port ${OPEN_WEBUI_INTERNAL_PORT}"
+    environment:
+      - WEBUI_SECRET_KEY=${OPEN_WEBUI_SECRET_KEY}
+      - WEBUI_URL=http://localhost:${OPEN_WEBUI_EXTERNAL_PORT}
+      - CORS_ALLOW_ORIGIN=http://localhost:${OPEN_WEBUI_EXTERNAL_PORT}
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks: [backend]
+
+  open-terminal:
+    image: ghcr.io/open-webui/open-terminal
+    container_name: open-terminal
+    depends_on: [open-webui]
+    entrypoint: "/usr/bin/tini -- /app/entrypoint.sh run --host 0.0.0.0 --port ${OPEN_TERMINAL_INTERNAL_PORT} --cors-allowed-origins http://open-webui:${OPEN_WEBUI_INTERNAL_PORT}"
+    environment:
+      - OPEN_TERMINAL_API_KEY=${OPEN_TERMINAL_API_KEY}
+    volumes:
+      - open-terminal-data:/home/user
+    networks: [backend]
+
+  caddy-gateway:
+    image: caddy:2.11.4-alpine
+    container_name: caddy-gateway
+    environment:
+      - OPEN_WEBUI_INTERNAL_PORT=${OPEN_WEBUI_INTERNAL_PORT}
+      - OPEN_WEBUI_EXTERNAL_PORT=${OPEN_WEBUI_EXTERNAL_PORT}
+      - GRAFANA_INTERNAL_PORT=${GRAFANA_INTERNAL_PORT}
+      - GRAFANA_EXTERNAL_PORT=${GRAFANA_EXTERNAL_PORT}
+    ports:
+      - "${OPEN_WEBUI_EXTERNAL_PORT}:${OPEN_WEBUI_EXTERNAL_PORT}"
+      - "${GRAFANA_EXTERNAL_PORT}:${GRAFANA_EXTERNAL_PORT}"
+    volumes:
+      - caddy-data:/data
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      backend: {}
+      frontend:
+        priority: 100
+
+volumes:
+  open-webui-data:
+  open-terminal-data:
+  caddy-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+
+secrets:
+  llama-cpp-api-key:
+    file: ./llama-cpp-api-key.env
